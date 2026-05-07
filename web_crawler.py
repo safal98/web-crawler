@@ -1,9 +1,11 @@
 import requests
 import sys
+import time
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 from collections import deque
 import argparse
+import urllib.robotparser
 
 # set up arguments
 parser = argparse.ArgumentParser(description="Web Crawler")
@@ -13,11 +15,32 @@ parser.add_argument("-d", "--depth", type=int, default=3, help="Max depth")
 
 args = parser.parse_args()
 
+USER_AGENT = "MyCrawler/1.0"
+
+
 # define crawler
 def crawl(start_url, max_page=50):
     visited = set() # track visited URLs
     queue = deque([start_url]) # queue of URLs to visit
-    base_domain = urlparse(start_url).netloc # extract domain
+
+    parsed_start = urlparse(start_url)
+    base_domain = parsed_start.netloc # extract domain
+    robots_txt_url = f"{parsed_start.scheme}://{base_domain}/robots.txt"
+
+    # setup for robots.txt
+    robot_parser = urllib.robotparser.RobotFileParser()
+    robot_parser.set_url(robots_txt_url)
+
+    try:
+        robot_parser.read()
+        crawl_delay = (
+            robot_parser.crawl_delay(USER_AGENT) or robot_parser.crawl_delay("*") or 1
+        )
+        print(f"robots.txt loaded. Crawl delay: {crawl_delay}s")
+    except Exception as e:
+        print(f"Could not read robots.txt ({e}). proceeding with default delay.")
+        robot_parser = None
+        crawl_delay = 1
 
     # keep crawling until queue is empty and we hit the page limit
     while queue and len(visited) < max_page:
@@ -25,8 +48,16 @@ def crawl(start_url, max_page=50):
 
         if url in visited: # skip if URL already visited
             continue
+
+        if robot_parser and not robot_parser.can_fetch(USER_AGENT, url):
+            print(f"Blocked by robots.txt: {url}")
+            continue
+
+        time.sleep(crawl_delay)
+
+        
         try: 
-            response = requests.get(url, timeout=5) # fetch the page, give up after 5 sec
+            response = requests.get(url, timeout=5, headers={"User-Agent": USER_AGENT}) # fetch the page, give up after 5 sec
             if "text/html" not in response.headers.get("Content-Type", ""):
                 continue
             visited.add(url) # mark this URL as visited 
